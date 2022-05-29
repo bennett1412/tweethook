@@ -1,21 +1,21 @@
-import requests
-import json
-import configtoken           ##contains bearer token
+import requests,json, tweepy
+from random import randint
+import os
+from boto.s3.connection import S3Connection
 import time
-# import pprint
-# import sqlite3
-# import os
 
+CONSUMER_KEY = os.environ['consumer_key']
+CONSUMER_SECRET = os.environ['consumer_secret']
+ACCESS_TOKEN = os.environ['access_token']
+ACCESS_TOKEN_SECRET = os.environ['access_token_secret']
+
+auth = tweepy.OAuthHandler(CONSUMER_KEY, CONSUMER_SECRET)
+auth.set_access_token(ACCESS_TOKEN, ACCESS_TOKEN_SECRET)
+api = tweepy.API(auth)
 
 
 def create_url_tweets():
-    return "https://api.twitter.com/2/tweets/search/stream?tweet.fields=author_id,referenced_tweets,conversation_id,public_metrics,created_at,source"
-
-def create_url_users(authID):
-    return "https://api.twitter.com/2/users?ids="+str(authID)+"&user.fields=profile_image_url"
-
-def create_url_parent_tweets(refTweet):
-    return "https://api.twitter.com/2/tweets?ids="+str(refTweet["id"])+"&tweet.fields=author_id,referenced_tweets,conversation_id,public_metrics,created_at,source"
+    return "https://api.twitter.com/2/tweets/search/stream?tweet.fields=in_reply_to_user_id,author_id,referenced_tweets,conversation_id,public_metrics,created_at,source"
 
 def create_headers(bearer_token):
     headers = {"Authorization": "Bearer {}".format(bearer_token)}
@@ -24,15 +24,14 @@ def create_headers(bearer_token):
 
 def connect_to_endpoint_tweet(url, headers):
     response = requests.request("GET", url, headers=headers, stream=True)
-    t0 = time.perf_counter()
     print('twitter response: ',response.status_code)
     # print(response.headers)
     if response.status_code != 200:
-        raise Exception(
-            "Request returned an error: {} {}".format(
-                response.status_code, response.text
-            )
-        )
+        print(f"Request returned an error code: {response.status_code} and text: {response.text}")
+        print(f"header: {response.headers}")
+        time.sleep(2)
+        return
+        
     else:
         try:
             for response_line in response.iter_lines():
@@ -40,85 +39,26 @@ def connect_to_endpoint_tweet(url, headers):
                     json_response = json.loads(response_line)
                     print(json.dumps(json_response, indent =4,sort_keys=True))
                     authID = json_response["data"]["author_id"]
-                    refTweet = json_response["data"]["referenced_tweets"][0]
-                    
-                    # store_tweet_data(json_response)
-                    connect_to_endpoint_users(authID,headers)
-                    if "referenced_tweets" in json_response["data"]:
-                        get_all_parents(refTweet,headers)
+                    parentTwtID = json_response["data"]["referenced_tweets"][0]["id"]
+                    parentauthor = json_response["data"]["in_reply_to_user_id"]
+                    message = "https://twitter.com/"+parentauthor+"/status/"+parentTwtID
+                    try:
+                        dm = api.send_direct_message(recipient_id = authID,text = message)
+                        print(dm.message_create['message_data']['text'])
+                    except tweepy.TweepError as e:
+                        print("ThreaderBot:Error in sending '{}' as dm response, {}".format(message,e))
         except:
-            t1 = time.perf_counter() - t0
-            print("connection lasted :",t1)
-            return "callagain"
-
-
-def get_all_parents(refTweet,headers):
-    url = create_url_parent_tweets(refTweet)
-    response = requests.request("GET", url, headers=headers)
-    print('twitter parent response: ',response.status_code)
-    # print(response.headers)
-    if response.status_code != 200:
-        raise Exception(
-            "Request returned an error: {} {}".format(
-                response.status_code, response.text
-            )
-        )
-    else:
-        json_response = json.loads(response.content)
-        print(json.dumps(json_response, indent =4,sort_keys=True))
-        authID = json_response["data"][0]["author_id"]
-        connect_to_endpoint_users(authID,headers)
-        store_tweet_data(json_response)
-        if(json_response["data"][0]["id"]!=json_response["data"][0]["conversation_id"]):
-            get_all_parents(json_response["data"][0]["referenced_tweets"][0],headers)
-
-
-def connect_to_endpoint_users(authID, headers):
-    url = create_url_users(authID)
-    response = requests.request("GET", url, headers=headers)
-    print('user response: ',response.status_code)
-    # print(response.headers)
-    if response.status_code != 200:
-        raise Exception(
-            "Request returned an error: {} {}".format(
-                response.status_code, response.text
-            )
-        )
-    else:
-        json_response = json.loads(response.content)
-        # store_user_data(json_response)
-        print(json.dumps(json_response,indent=4))
-
-
-def store_tweet_data(json_response):
-    data=dict()
-    for key,value in json_response["data"].items():
-        data[key]= value
-    if "referenced_tweets" not in data:
-        data["referenced_tweets"] = [{"id":"none","type":"none"}]
-    print(json.dumps(data, indent =4,sort_keys=True))
-    
-
-
-def store_user_data(json_response):
-    data=dict()
-    for key,value in json_response["data"][0].items():
-        data[key]= value
-    print(json.dumps(data, indent =4,sort_keys=True))
-    
-
-
+            pass
 
 
 def main():
-    bearer_token = configtoken.brToken
-    # print(configtoken.brToken)
+    bearer_token = os.environ['brToken']
     url = create_url_tweets()
     headers = create_headers(bearer_token)
     timeout = 0
-    error = connect_to_endpoint_tweet(url=url,headers=headers)
-    if error == "callagain":
-        connect_to_endpoint_tweet(url=url,headers=headers)
+    while(1):
+        connect_to_endpoint_tweet(url,headers)
+        timeout += 1
 
 
 if __name__ == "__main__":
